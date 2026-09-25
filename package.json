@@ -1,10 +1,13 @@
 {
   "name": "@diffci.com/diffci",
-  "version": "0.2.4",
-  "description": "DiffCI - deterministic change-aware CI planning",
+  "version": "0.2.10",
+  "description": "Change-aware CI analysis and conservative affected-test selection for GitHub Actions and coding agents",
   "keywords": [
     "ci",
     "cicd",
+    "ci-cd",
+    "mcp",
+    "model-context-protocol",
     "ai-agents",
     "coding-agents",
     "claude-code",
@@ -13,6 +16,8 @@
     "copilot",
     "grok",
     "test-selection",
+    "test-impact-analysis",
+    "affected-tests",
     "github-actions"
   ],
   "license": "AGPL-3.0-only",
@@ -21,6 +26,7 @@
     "type": "git",
     "url": "git+https://github.com/DiffCI/DiffCI.com.git"
   },
+  "homepage": "https://diffci.com/",
   "private": false,
   "type": "module",
   "engines": {
@@ -33,6 +39,7 @@
   "files": [
     "action.yml",
     "dist-client/src/client",
+    "dist-client/src/preflight",
     "README.md",
     "server.json",
     "glama.json",
@@ -65,14 +72,14 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "test": "tsx --test \"tests/**/*.test.ts\"",
-    "check": "npm run typecheck && npm run test",
+    "check": "npm run check:public-metadata && npm run typecheck && npm run test",
     "prepack": "npm run build:client",
     "package:smoke": "node scripts/package-smoke.mjs",
     "diffci": "tsx scripts/diffci.ts",
     "impact": "tsx scripts/diffci.ts impact",
     "observe": "tsx src/client/cli.ts observe",
     "verify-workflow": "tsx src/client/cli.ts verify-workflow",
-    "build:client": "tsc -p tsconfig.client.json",
+    "build:client": "tsc -p tsconfig.client.json && node scripts/ensure-client-executables.mjs",
     "build:agent": "tsx scripts/build-agent.ts",
     "inspect:agent": "tsx scripts/inspect-agent-package.ts",
     "dogfood": "tsx scripts/dogfood-observe.ts",
@@ -98,6 +105,9 @@
     "product:migrate": "tsx scripts/migrate-product-db.ts",
     "site:dev": "wrangler dev --config wrangler.site.jsonc --port 8788",
     "site:deploy": "wrangler deploy --config wrangler.site.jsonc",
+    "site:sitemap": "node scripts/generate-site-sitemap.mjs",
+    "site:indexnow": "node scripts/submit-indexnow.mjs",
+    "release:sync": "node scripts/sync-public-metadata.mjs",
     "study:render": "tsx scripts/render-open-study.ts",
     "validation:deploy": "wrangler deploy --config wrangler.validation-env.jsonc",
     "validation:pack": "tsx scripts/diffci-validation-cli.ts pack",
@@ -127,7 +137,9 @@
     "corpus:register": "tsx scripts/register-corpus-entry.ts",
     "ci:benchmark": "tsx scripts/ci-inference-benchmark.ts",
     "ci:reproduce": "tsx scripts/ci-reproduction.ts",
-    "check:oss-boundary": "node scripts/check-oss-boundary.mjs"
+    "check:oss-boundary": "node scripts/check-oss-boundary.mjs",
+    "check:public-metadata": "node scripts/check-public-metadata.mjs",
+    "registry:verify": "node scripts/verify-mcp-registry.mjs"
   },
   "dependencies": {
     "@diffci.com/core": "git+https://github.com/DiffCI/core.git#db1d637dfcca8d8f7fa047500dfe0027d0d018a7",

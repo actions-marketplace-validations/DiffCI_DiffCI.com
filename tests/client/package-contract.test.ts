@@ -9,6 +9,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 describe("npm package contract", () => {
   const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
     name?: string;
+    version?: string;
     private?: boolean;
     bin?: Record<string, string>;
     files?: string[];
@@ -26,6 +27,7 @@ describe("npm package contract", () => {
       packageArguments?: Array<{ type?: string; value?: string }>;
       transport?: { type?: string };
     }>;
+    remotes?: Array<{ type?: string; url?: string }>;
   };
 
   it("publishes a diffci binary backed by the client build", () => {
@@ -35,8 +37,10 @@ describe("npm package contract", () => {
     assert.equal(pkg.bin?.diffci, "dist-client/src/client/cli.js");
     assert.equal(pkg.bin?.["diffci-mcp"], "dist-client/src/client/mcp.js");
     assert.equal(pkg.scripts?.prepack, "npm run build:client");
+    assert.equal(pkg.scripts?.["build:client"], "tsc -p tsconfig.client.json && node scripts/ensure-client-executables.mjs");
     assert.equal(pkg.scripts?.["check:oss-boundary"], "node scripts/check-oss-boundary.mjs");
     assert.ok(pkg.files?.includes("dist-client/src/client"));
+    assert.ok(pkg.files?.includes("dist-client/src/preflight"));
     assert.deepEqual(pkg.bundleDependencies, ["@diffci.com/core"]);
     assert.match(pkg.dependencies?.["@diffci.com/core"] ?? "", /^git\+https:\/\/github\.com\/DiffCI\/core\.git#[0-9a-f]{40}$/);
   });
@@ -45,6 +49,7 @@ describe("npm package contract", () => {
     const allowed = new Set([
       "action.yml",
       "dist-client/src/client",
+      "dist-client/src/preflight",
       "README.md",
       "server.json",
       "glama.json",
@@ -84,5 +89,6 @@ describe("npm package contract", () => {
     assert.equal(server.packages?.[0]?.version, pkg.version);
     assert.equal(server.packages?.[0]?.transport?.type, "stdio");
     assert.deepEqual(server.packages?.[0]?.packageArguments, [{ type: "positional", value: "mcp" }]);
+    assert.deepEqual(server.remotes, [{ type: "streamable-http", url: "https://diffci.com/mcp" }]);
   });
 });

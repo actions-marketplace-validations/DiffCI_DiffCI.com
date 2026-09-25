@@ -14,6 +14,7 @@
  *   check              analysis plus automatic paired runtime measurement
  *   observe            analyse the checkout and write an observation report
  *   verify-savings     run a paired full-versus-selected timing check
+ *   validate-specs     block conflicting same-turn change specifications
  *   verify-workflow    check that a DiffCI job in this repository's workflows cannot affect other jobs
  *   version            print the observer version
  *
@@ -31,8 +32,11 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import { observe, isInsideRepository } from "./observe.js";
 import { inferFullCommand, inferSelectedCommand } from "./full-command.js";
+import { addDiffciPackageScripts, installDiffci } from "./install.js";
 import type { ObservationReport, WorkflowFinding } from "./report.js";
 import { submitObservation } from "./submit.js";
+import { sendUsageSignal } from "./usage-signal.js";
+import { detectSpecificationConflicts, readSpecificationFile } from "./spec-conflicts.js";
 import { formatVerifySavingsSummary, measureCommand, runVerifySavings, writeVerifySavingsReport, type VerifySavingsOptions } from "./verify-savings.js";
 import { auditWorkflows, isNonInterfering } from "./workflow-guard.js";
 
@@ -105,6 +109,10 @@ function defaultReportPath(env: NodeJS.ProcessEnv): string {
   return join(base, `diffci-observation-${stamp}.json`);
 }
 
+// Quoting the scoped package keeps the same command valid in POSIX shells, cmd.exe, and
+// PowerShell, where an unquoted leading `@` is parsed as the splatting operator.
+const AGENT_DEFAULT_COMMAND = 'npx "@diffci.com/diffci@latest" check';
+
 const AGENT_INSTRUCTIONS = `# DiffCI Agent Instructions
 
 Use DiffCI as the default CI/CD validation lens before proposing, committing, or opening pull requests.
@@ -112,7 +120,7 @@ Use DiffCI as the default CI/CD validation lens before proposing, committing, or
 Default command:
 
 \`\`\`bash
-npx @diffci.com/diffci@latest check
+${AGENT_DEFAULT_COMMAND}
 \`\`\`
 
 What this does:
@@ -137,7 +145,7 @@ alwaysApply: true
 Before proposing, committing, or opening pull requests, run:
 
 \`\`\`bash
-npx @diffci.com/diffci@latest check
+${AGENT_DEFAULT_COMMAND}
 \`\`\`
 
 DiffCI check analyzes the change and runs full and selected test commands when it can infer them. It sends nothing. Test commands may write generated files. Use observe --no-send for analysis without execution. Required project CI remains authoritative.
@@ -148,7 +156,7 @@ const GITHUB_COPILOT_INSTRUCTIONS = `# Repository CI/CD Validation
 Use DiffCI as the default change-aware CI/CD validation lens:
 
 \`\`\`bash
-npx @diffci.com/diffci@latest check
+${AGENT_DEFAULT_COMMAND}
 \`\`\`
 
 DiffCI check analyzes the change and runs inferred full and selected test commands to measure a paired runtime. It sends nothing; required repository checks remain authoritative.
@@ -156,7 +164,7 @@ DiffCI check analyzes the change and runs inferred full and selected test comman
 
 const DIFFCI_CONFIG = `{
   "$schema": "https://diffci.com/schemas/diffci.config.schema.json",
-  "agentDefaultCommand": "npx @diffci.com/diffci@latest check",
+  "agentDefaultCommand": ${JSON.stringify(AGENT_DEFAULT_COMMAND)},
   "mode": "check",
   "sendReports": false
 }
@@ -178,7 +186,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npx @diffci.com/diffci@${version} observe --no-send
+      - run: npx "@diffci.com/diffci@${version}" observe --no-send
 `;
 }
 
@@ -205,10 +213,26 @@ function runInit(flags: Record<string, string | boolean>, env: NodeJS.ProcessEnv
   ];
   if (includeWorkflow) writes.push(writeInitFile(repoPath, ".github/workflows/diffci.yml", diffciWorkflow(identity.version), force));
 
+  let installed: string | undefined;
+  if (flags.install === true) {
+    const { plan, result } = installDiffci(repoPath, identity.version);
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      const detail = result.stderr.trim() || result.stdout.trim() || `${plan.manager} exited with status ${result.status ?? "unknown"}`;
+      throw new Error(`could not install ${plan.packageSpec}: ${detail}`);
+    }
+    const scripts = addDiffciPackageScripts(repoPath);
+    installed = `installed ${plan.packageSpec} as an exact dev dependency with ${plan.manager}`;
+    if (scripts.added.length > 0) installed += `; added package scripts ${scripts.added.join(", ")}`;
+    if (scripts.kept.length > 0) installed += `; kept existing package scripts ${scripts.kept.join(", ")}`;
+  }
+
   console.log(`DiffCI initialized for AI coding agents in ${repoPath}`);
   for (const write of writes) console.log(`  ${write}`);
+  if (installed) console.log(`  ${installed}`);
+  else console.log("  skipped package installation (pass --install to add an exact dev dependency)");
   if (!includeWorkflow) console.log("  skipped .github/workflows/diffci.yml (pass --workflow to add it)");
-  console.log("\nDefault agent command: npx @diffci.com/diffci@latest check");
+  console.log(`\nDefault agent command: ${AGENT_DEFAULT_COMMAND}`);
   return 0;
 }
 
@@ -290,6 +314,9 @@ async function runCheck(flags: Record<string, string | boolean>, env: NodeJS.Pro
   const observationCode = await runObserve({ ...flags, out: reportPath, quiet: true, "no-send": true }, env);
   if (observationCode !== 0) return observationCode;
   const observation = JSON.parse(readFileSync(reportPath, "utf8")) as ObservationReport;
+  if ((flags["share-usage"] === true || env.DIFFCI_SHARE_USAGE === "1") && flags["no-send"] !== true) {
+    await sendUsageSignal({ command: "check", outcome: observation.status === "OBSERVED" ? "observed" : observation.status === "REFUSED" ? "refused" : "error", version: observerIdentity().version });
+  }
   const print = (message: string): void => { if (flags.quiet !== true && flags.json !== true) console.log(message); };
   print(summarise(observation, true));
   print(`  observation report: ${reportPath}`);
@@ -356,13 +383,17 @@ async function runCheck(flags: Record<string, string | boolean>, env: NodeJS.Pro
     cwd: repoPath,
     timeoutMs,
     tailBytes,
+    repetitions: numberFlag(flags, "repetitions"),
+    cacheState: parseCacheState(flags),
+    cachePreparationCommand: stringFlag(flags, "cache-prepare"),
+    alternateOrder: flags["fixed-order"] === true ? false : undefined,
   });
   writeVerifySavingsReport(savings, { out: savingsPath, markdown: markdownPath });
   print(formatVerifySavingsSummary(savings));
   print(`  savings report: ${savingsPath}`);
   print(`  markdown: ${markdownPath}`);
   if (flags.json === true) console.log(JSON.stringify({ observation, savings }, null, 2));
-  return savings.comparison.fullCommandSucceeded && savings.comparison.selectedCommandSucceeded ? 0 : 1;
+  return savings.comparison.evidenceValid ? 0 : 1;
 }
 
 async function runObserve(flags: Record<string, string | boolean>, env: NodeJS.ProcessEnv): Promise<number> {
@@ -401,6 +432,9 @@ async function runObserve(flags: Record<string, string | boolean>, env: NodeJS.P
 
   mkdirSync(dirname(reportPath), { recursive: true });
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  if ((flags["share-usage"] === true || env.DIFFCI_SHARE_USAGE === "1") && flags["no-send"] !== true) {
+    await sendUsageSignal({ command: "observe", outcome: report.status === "OBSERVED" ? "observed" : report.status === "REFUSED" ? "refused" : "error", version: identity.version });
+  }
 
   const summary = summarise(report);
   if (flags.json === true) {
@@ -497,6 +531,13 @@ function numberFlag(flags: Record<string, string | boolean>, name: string): numb
   return parsed;
 }
 
+function parseCacheState(flags: Record<string, string | boolean>): "cold" | "warm" | "unknown" | undefined {
+  const value = stringFlag(flags, "cache-state");
+  if (value === undefined) return undefined;
+  if (value !== "cold" && value !== "warm" && value !== "unknown") throw new Error("--cache-state must be cold, warm, or unknown");
+  return value;
+}
+
 function parseVerifySavingsOptions(flags: Record<string, string | boolean>, env: NodeJS.ProcessEnv): VerifySavingsOptions {
   const full = stringFlag(flags, "full");
   const selected = stringFlag(flags, "selected");
@@ -518,6 +559,10 @@ function parseVerifySavingsOptions(flags: Record<string, string | boolean>, env:
     timeoutMs: numberFlag(flags, "timeout-ms") ?? 30 * 60 * 1000,
     analysisOverheadMs: numberFlag(flags, "analysis-overhead-ms"),
     tailBytes: numberFlag(flags, "tail-bytes") ?? 12_000,
+    repetitions: numberFlag(flags, "repetitions"),
+    cacheState: parseCacheState(flags),
+    cachePreparationCommand: stringFlag(flags, "cache-prepare"),
+    alternateOrder: flags["fixed-order"] === true ? false : undefined,
   };
 }
 
@@ -528,7 +573,7 @@ function runVerifySavingsCommand(flags: Record<string, string | boolean>, env: N
   console.log(formatVerifySavingsSummary(report));
   console.log(`  report: ${options.out}`);
   if (options.markdown) console.log(`  markdown: ${options.markdown}`);
-  return report.comparison.fullCommandSucceeded && report.comparison.selectedCommandSucceeded ? 0 : 1;
+  return report.comparison.evidenceValid ? 0 : 1;
 }
 
 function defaultPilotOutputDir(repoPath: string): string {
@@ -594,43 +639,69 @@ async function runPilot(flags: Record<string, string | boolean>, env: NodeJS.Pro
     timeoutMs: numberFlag(flags, "timeout-ms") ?? 30 * 60 * 1000,
     analysisOverheadMs: numberFlag(flags, "analysis-overhead-ms"),
     tailBytes: numberFlag(flags, "tail-bytes") ?? 12_000,
+    repetitions: numberFlag(flags, "repetitions"),
+    cacheState: parseCacheState(flags),
+    cachePreparationCommand: stringFlag(flags, "cache-prepare"),
+    alternateOrder: flags["fixed-order"] === true ? false : undefined,
   });
   writeVerifySavingsReport(savings, { out: savingsPath, markdown: markdownPath });
 
   console.log(formatVerifySavingsSummary(savings));
   console.log(`  savings report: ${savingsPath}`);
   console.log(`  markdown: ${markdownPath}`);
-  return savings.comparison.fullCommandSucceeded && savings.comparison.selectedCommandSucceeded ? 0 : 1;
+  return savings.comparison.evidenceValid ? 0 : 1;
+}
+
+function runValidateSpecs(flags: Record<string, string | boolean>): number {
+  const file = stringFlag(flags, "file");
+  if (!file) throw new Error("validate-specs requires --file <json>");
+  const report = detectSpecificationConflicts(readSpecificationFile(file));
+  if (flags.json === true) console.log(JSON.stringify(report, null, 2));
+  else if (report.valid) console.log(`DiffCI specification validation: no conflicts across ${report.specificationsChecked} specification(s) and ${report.logicalTargetsChecked} logical target(s).`);
+  else {
+    console.log(`DiffCI specification validation: BLOCKED (${report.conflicts.length} logical-target conflict${report.conflicts.length === 1 ? "" : "s"})`);
+    for (const blocker of report.blockers) console.log(`  ${blocker}`);
+  }
+  return report.valid ? 0 : 1;
 }
 
 const USAGE = `diffci - change-aware CI analysis and paired timing
 
 Usage:
-  diffci init [--repo <path>] [--workflow] [--force]
+  diffci init [--repo <path>] [--workflow] [--install] [--force]
   diffci mcp
   diffci check [--repo <path>] [--out <file>] [--base <sha> --head <sha>]
-               [--redact-paths] [--json] [--quiet] [--fail-on-error] [--timeout-ms <ms>]
+               [--redact-paths] [--json] [--quiet] [--fail-on-error] [--timeout-ms <ms>] [--share-usage]
   diffci pilot --full <command> [--repo <path>] [--out-dir <dir>] [--label <name>]
   diffci observe [--repo <path>] [--out <file>] [--base <sha> --head <sha>]
                  [--redact-paths] [--json] [--quiet] [--fail-on-error]
-                 [--api-url <url> --api-token <token>] [--no-send]
+                 [--api-url <url> --api-token <token>] [--no-send] [--share-usage]
   diffci verify-savings --repo <path> --full <command>
                          (--selected <command> | --selected-from-report <file>)
                          --out <file> [--markdown <file>] [--label <name>]
+                         [--repetitions <1-20>] [--cache-state cold|warm|unknown]
+                         [--cache-prepare <command>] [--fixed-order]
+  diffci validate-specs --file <json> [--json]
   diffci verify-workflow [--repo <path>]
   diffci version
 
 init writes AGENTS.md, CLAUDE.md, Cursor rules, Copilot instructions, and diffci.config.json.
+--workflow adds a separate non-blocking observation workflow. --install detects npm, pnpm, Yarn,
+or Bun, installs this DiffCI version as an exact dev dependency, updates the manager's lockfile,
+and adds diffci:check and diffci:observe package scripts without replacing existing scripts.
 mcp runs the stdio MCP server for native agent integrations.
 check analyzes the change, runs inferred full and selected commands, and shows measured savings.
 pilot runs observe and verify-savings together, writing reports to ../diffci-output by default.
 observe analyses the checkout and writes one JSON report. It runs nothing and changes nothing.
 verify-savings runs both commands and reports measured paired runtime; it is an opt-in pilot command.
+validate-specs checks an explicit list of specification IDs and logical targets and blocks duplicates.
 verify-workflow checks that the job running DiffCI cannot affect any other job, and exits 1 if it can.
 
 The report is sent only when both --api-url and --api-token are given (or DIFFCI_API_URL and
 DIFFCI_TOKEN are set). A failed send is reported and never fails the step - the report is on disk
 either way. Plain http is refused; the token is never printed.
+--share-usage (or DIFFCI_SHARE_USAGE=1) sends only command, outcome, and version to DiffCI.
+No repository, commit, test, report, or persistent identifier is sent. --no-send disables it.
 `;
 
 async function main(): Promise<void> {
@@ -661,6 +732,9 @@ async function main(): Promise<void> {
       return;
     case "verify-savings":
       process.exitCode = runVerifySavingsCommand(flags, env);
+      return;
+    case "validate-specs":
+      process.exitCode = runValidateSpecs(flags);
       return;
     case "verify-workflow":
       process.exitCode = runVerifyWorkflow(flags, env);

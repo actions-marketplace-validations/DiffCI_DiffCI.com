@@ -13,4 +13,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npx @diffci.com/diffci@0.1.11 check
+      # Package-distribution canary. The local Action is dogfooded separately in
+      # diffci-observe.yml; this command stays analysis-only to avoid duplicating CI tests.
+      # Run outside the checkout so npm cannot mistake this package for the registry install.
+      - run: |
+          cd "$RUNNER_TEMP"
+          npx --yes --package "@diffci.com/diffci@0.2.10" diffci observe --repo "$GITHUB_WORKSPACE" --no-send

@@ -15,13 +15,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: DiffCI/DiffCI.com@dee4f7b938a7720d077c1124ef2ea050aa2625d6
+      - uses: DiffCI/DiffCI.com@e1d7bab271c5d83899bda0034d70d3e34c10c1f7
 ```
 
-This example pins the Action at the verified `v0.1.4` commit. Verify the installed workflow locally:
+This example pins the Action at the verified `v0.2.10` feature commit. Verify the installed workflow locally:
 
 ```sh
-npx @diffci.com/diffci@latest verify-workflow
+npx "@diffci.com/diffci@latest" verify-workflow
 ```
 
 Keep the DiffCI job out of required checks and other jobs' `needs` lists. The Action uploads the `diffci-observation` artifact by default. Sending a report to DiffCI's hosted service requires an explicitly configured endpoint and token. See the [distribution guide](../distribution.md) for the installation contract.

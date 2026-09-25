@@ -48,7 +48,7 @@ and the [DiffCI submission packet](tidelift-submission.md).
 
 ## GitHub App
 
-The DiffCI Shadow GitHub App is the lowest-friction research and design-partner path. It receives
+The unified read-only DiffCI GitHub App is the lowest-friction research and design-partner path. It receives
 repository events, runs shadow analysis outside the repository's CI jobs, and reconciles predictions
 against real CI outcomes. Use it when a maintainer wants observation without adding a workflow step.
 
@@ -68,10 +68,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: DiffCI/DiffCI.com@3aa76a84919691cf7e8f9d1f1f6a80399325d1ae
+      - uses: DiffCI/DiffCI.com@e1d7bab271c5d83899bda0034d70d3e34c10c1f7
 ```
 
-The example pins release `v0.2.2` to its full commit SHA. `npx @diffci.com/diffci@latest verify-workflow`
+The example pins release `v0.2.10` to its qualified feature commit SHA. `npx "@diffci.com/diffci@latest" verify-workflow`
 checks that the job is dedicated, read-only, not required by other jobs, and unable to alter the rest
 of CI.
 
@@ -80,8 +80,8 @@ of CI.
 The CLI is the standalone npm package surface. The package name is `@diffci.com/diffci`:
 
 ```bash
-npx @diffci.com/diffci@latest observe
-npx @diffci.com/diffci@latest verify-workflow
+npx "@diffci.com/diffci@latest" observe
+npx "@diffci.com/diffci@latest" verify-workflow
 ```
 
 `observe` writes a JSON report outside the checkout by default. It never runs, skips, cancels, or
@@ -106,7 +106,7 @@ Estimated CO2                   xxx kg
 Estimated water                 xxx L
 ```
 
-That makes the open-source proposition explicit: install DiffCI Shadow, change nothing in CI, and learn
+That makes the open-source proposition explicit: install DiffCI, change nothing in CI, and learn
 how much compute may be wasted.
 
 ## Future Package Managers
@@ -129,3 +129,16 @@ Tidelift belongs to the open-source package channel. It can provide maintenance,
 supply-chain assurance for the npm package without requiring a hosted DiffCI account. It should support
 the OSS core rather than define a separate feature tier. The readiness checklist lives in
 [`tidelift-package-support.md`](tidelift-package-support.md).
+
+## Release metadata invariant
+
+`release-manifest.json` is the source of truth for the npm, MCP, directory, workflow, Action, website,
+and documentation versions. Prepare a future release with:
+
+```bash
+npm run release:sync -- 0.2.10 <qualified-40-character-action-sha>
+npm run check:public-metadata
+```
+
+The sync command updates every managed surface. The metadata check runs inside `npm run check` and the
+tag-release workflow, so version or immutable Action-pin drift blocks both pull requests and releases.

@@ -6,12 +6,12 @@ Copy only the integration your repository needs. DiffCI does not replace require
 
 Add this to `AGENTS.md` or the equivalent agent instruction file:
 
-> Before calling a change PR-ready, run `npx @diffci.com/diffci@latest check` from the repository
+> Before calling a change PR-ready, run `npx "@diffci.com/diffci@latest" check` from the repository
 > root. Use its output to understand affected tests and fallback reasons. Keep the repository's
 > required CI authoritative. If DiffCI reports `REFUSED` or `ERROR`, run the normal tests.
 
 `check` may execute the repository's full and selected test commands, which may write generated
-files. For analysis without executing tests, run `npx @diffci.com/diffci@latest observe --no-send`.
+files. For analysis without executing tests, run `npx "@diffci.com/diffci@latest" observe --no-send`.
 
 ## GitHub Action
 
@@ -30,10 +30,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: DiffCI/DiffCI.com@3aa76a84919691cf7e8f9d1f1f6a80399325d1ae # v0.2.2
+      - uses: DiffCI/DiffCI.com@e1d7bab271c5d83899bda0034d70d3e34c10c1f7 # v0.2.10
 ```
 
-Run `npx @diffci.com/diffci@latest verify-workflow` before starting a pilot. The Action uploads a
+Run `npx "@diffci.com/diffci@latest" verify-workflow` before starting a pilot. The Action uploads a
 GitHub artifact by default; it sends nothing to DiffCI Cloud without an explicit endpoint and token.
 
 ## MCP client
@@ -68,5 +68,16 @@ Suggested description:
 
 - [npm package](https://www.npmjs.com/package/@diffci.com/diffci)
 - [GitHub Marketplace Action](https://github.com/marketplace/actions/diffci-observer)
-- [Agent guide](https://diffci.com/docs/ai-agents.html)
+- [Agent guide](https://diffci.com/docs/ai-agents)
 - [Context7 CLI documentation](https://context7.com/diffci/diffci.com)
+- [Share a first DiffCI report](https://github.com/DiffCI/DiffCI.com/issues/new?template=first-diffci-report.yml)
+
+If a maintainer is evaluating DiffCI for the first time, ask for one local run before proposing a
+workflow change:
+
+```bash
+npx "@diffci.com/diffci@latest" check
+```
+
+Then use the first-report issue template to capture the result, fallback/refusal reasons, CI shape,
+and whether a seven-day non-blocking observation pilot would be useful.

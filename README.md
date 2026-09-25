@@ -1,9 +1,11 @@
 # DiffCI
 
+[Website](https://diffci.com/) · [Test impact analysis guide](https://diffci.com/test-impact-analysis/github-actions) · [Open evidence study](https://diffci.com/research/diffci-open-evidence-2026)
+
 
 [![npm version](https://img.shields.io/npm/v/@diffci.com/diffci.svg)](https://www.npmjs.com/package/@diffci.com/diffci)
 [![npm provenance](https://img.shields.io/badge/npm-provenance-blue)](https://docs.npmjs.com/generating-provenance-statements)
-[![MCP server](https://img.shields.io/badge/MCP-server-5f6fff)](docs/mcp.md)
+[![MCP server](https://img.shields.io/badge/MCP-server-5f6fff)](https://diffci.com/mcp-server)
 [![Agent safe](https://img.shields.io/badge/agent--safe-observation--only-0f766e)](docs/ai-agents.md)
 [![GitHub Marketplace](https://img.shields.io/badge/GitHub-Marketplace-blue)](https://github.com/marketplace/actions/diffci-observer)
 
@@ -17,23 +19,34 @@ selected commands when it can infer them. The `observe` command and Action remai
 From a Git repository checkout, with Node.js 22.5+ and Git installed, run:
 
 ```bash
-npx @diffci.com/diffci@latest check
+npx "@diffci.com/diffci@latest" check
 ```
 
 `check` explains affected tests and, when it can infer safe commands, runs both the full and selected
 test commands to measure the difference. It sends nothing to DiffCI. Test commands can create files
-in the checkout. For analysis without test execution, use `npx @diffci.com/diffci@latest observe --no-send`.
+in the checkout. For analysis without test execution, use `npx "@diffci.com/diffci@latest" observe --no-send`.
 
 To add instructions for coding agents, run:
 
 ```bash
-npx @diffci.com/diffci@latest init
+npx "@diffci.com/diffci@latest" init
 ```
+
+To also pin DiffCI as a development dependency and update the detected npm, pnpm, Yarn, or Bun
+lockfile, pass `--install`. Add `--workflow` for a separate non-blocking observation job:
+
+```bash
+npx "@diffci.com/diffci@latest" init --install --workflow
+```
+
+`--install` also adds `diffci:check` and `diffci:observe` package scripts. It preserves same-named
+scripts that the project already owns. After installation, CI or contributors can run
+`npm run diffci:check` or `npm run diffci:observe` without knowing the package name or version.
 
 On Windows PowerShell, quote the package name:
 
 ```powershell
-npx '@diffci.com/diffci@latest' check
+npx "@diffci.com/diffci@latest" check
 ```
 
 The [copyable adoption kit](docs/agent-adoption-kit.md) includes an `AGENTS.md` instruction and
@@ -41,9 +54,10 @@ maintainer PR text. AI-readable documentation is on [Context7 CLI](https://conte
 and [Context7 Core](https://context7.com/diffci/core). Use the [GitHub Marketplace Action](https://github.com/marketplace/actions/diffci-observer)
 for a separate, non-blocking observation job. Required project CI remains authoritative.
 
-One paired run is preliminary evidence; repeat comparisons and account for cache effects before
-claiming CI savings. On a full-validation fallback, `check` runs the full command once and reports
-0% reduction.
+One paired run is preliminary evidence. `verify-savings` can repeat comparisons, alternate arm order,
+record declared cache state, and run an explicit cache-preparation command before every arm. A result is
+labelled controlled only after at least three alternating, cache-prepared repetitions. On a
+full-validation fallback, `check` runs the full command once and reports 0% reduction.
 
 **Upgrade from 0.1.3:** tests excluded by a source-only `tsconfig.json` could be discovered without
 their dependency edges, producing an incomplete selection. This is fixed in **0.1.4**. Revalidate
@@ -67,12 +81,51 @@ not Cal.com's production savings or a prediction for your repository.
 [Read the timings and method](docs/research/2026-08-24-calcom-execution-observability/11-frozen-identity-and-complete-job-savings.md).
 
 Selection counts alone do not establish runtime savings. `check` reports a measured percentage only
-when both commands pass; `observe` does not execute tests.
+when both commands pass and the checked-out commit and worktree remain identical across both arms.
+The savings artifact embeds the base/head SHAs, observation SHA-256, commands, timings, and checkout
+snapshots. Snapshots use byte-level fingerprints for dirty files, manifests, lockfiles, and available
+resolved-dependency markers; the report also records the runner identity. A mismatch invalidates the
+comparison. `observe` does not execute tests.
 
 For an advanced paired runtime check, you can still run `observe` first and then run `verify-savings`
 against the observation report. It compares your normal full command with
 DiffCI's proposed selected command and writes JSON plus Markdown evidence; see
 [`docs/npm-adoption.md`](docs/npm-adoption.md#self-serve-runtime-pilot).
+
+For stronger evidence, run repeated measurements with an explicit cache preparation command:
+
+```bash
+npx "@diffci.com/diffci@latest" verify-savings \
+  --repo . --full "npm test" --selected-from-report ../diffci-observation.json \
+  --out ../diffci-savings.json --repetitions 3 --cache-state warm \
+  --cache-prepare "node scripts/prepare-ci-cache.mjs"
+```
+
+DiffCI alternates full/selected order, reports min/median/max timings, and conservatively classifies
+stable selection misses, likely flakes, shared/pre-existing failures, infrastructure failures, and
+inconclusive results. Cache preparation is user-supplied because DiffCI must not delete repository or
+tool caches on its own.
+
+## Validate same-turn change specifications
+
+When an agent or build tool supplies explicit specification IDs and logical targets, DiffCI can block
+two specifications from silently changing the same target:
+
+```json
+{
+  "specifications": [
+    { "id": "SPEC-API", "logicalTarget": "com.example.Widget#run" },
+    { "id": "SPEC-BEHAVIOR", "logicalTarget": "com.example.Widget#run" }
+  ]
+}
+```
+
+```bash
+npx "@diffci.com/diffci@latest" validate-specs --file change-specifications.json
+```
+
+The command exits non-zero and names every conflicting specification ID. This surface is opt-in and
+does not infer semantic targets from source code; callers must provide stable logical target names.
 
 ## Observe in GitHub Actions
 
@@ -91,13 +144,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: DiffCI/DiffCI.com@3aa76a84919691cf7e8f9d1f1f6a80399325d1ae
+      - uses: DiffCI/DiffCI.com@e1d7bab271c5d83899bda0034d70d3e34c10c1f7
 ```
 
-Then check the workflow locally with `npx @diffci.com/diffci@latest verify-workflow`. Keep the observer
+Then check the workflow locally with `npx "@diffci.com/diffci@latest" verify-workflow`. Keep the observer
 out of required checks and other jobs' `needs` lists. The Action adds a job summary and a
 `diffci-observation` artifact to the run; it does not alter which tests your other jobs execute.
-The example pins release `v0.2.2` to its full commit SHA for reproducibility.
+The example pins release `v0.2.10` to its qualified feature commit SHA for reproducibility.
 
 The CLI sends no report with `--no-send`. The Action uploads a GitHub artifact by default; sending to
 DiffCI's hosted service requires an explicitly configured endpoint and token.
@@ -122,13 +175,13 @@ For evaluation results and their limits, start with
 Add DiffCI instructions to a repository:
 
 ```bash
-npx @diffci.com/diffci@latest init
+npx "@diffci.com/diffci@latest" init
 ```
 
 Then ask your coding agent to run:
 
 ```bash
-npx @diffci.com/diffci@latest check
+npx "@diffci.com/diffci@latest" check
 ```
 
 Agent-specific docs:
@@ -140,20 +193,27 @@ Agent-specific docs:
 
 Live discovery files:
 [`llms.txt`](https://diffci.com/llms.txt) ·
-[`AI agents`](https://diffci.com/docs/ai-agents.html).
+[`AI agents`](https://diffci.com/docs/ai-agents).
 
 Adoption materials:
 [`outreach copy`](docs/adoption-outreach.md) ·
 [`metrics`](docs/adoption-metrics.md) ·
 [`targets`](docs/agent-adoption-targets.md).
 
-For native agent integrations, DiffCI also ships a stdio MCP server:
+For native agent integrations, DiffCI provides a stateless, read-only HTTPS MCP endpoint for validation
+guidance:
 
-```bash
-npx -p @diffci.com/diffci@latest diffci-mcp
+```text
+https://diffci.com/mcp
 ```
 
-See [`docs/mcp.md`](docs/mcp.md) for Claude, Cursor, Codex, and generic MCP config snippets.
+Use the stdio MCP server when tools need to inspect the local checkout or run tests:
+
+```bash
+npx -p "@diffci.com/diffci@latest" diffci-mcp
+```
+
+See the [MCP server page](https://diffci.com/mcp-server) for Codex, Claude Code, Cursor, and VS Code setup, or [`docs/mcp.md`](docs/mcp.md) for repository documentation.
 
 ## Project background
 
@@ -293,14 +353,14 @@ npm run research:sandbox:deploy
 DiffCI is intended to be installable as infrastructure, not only as a hosted shadow experiment:
 
 ```yaml
-- uses: DiffCI/DiffCI.com@3aa76a84919691cf7e8f9d1f1f6a80399325d1ae
+- uses: DiffCI/DiffCI.com@e1d7bab271c5d83899bda0034d70d3e34c10c1f7
 ```
 
 ```bash
-npx @diffci.com/diffci@latest observe
-npx @diffci.com/diffci@latest check
-npx @diffci.com/diffci@latest init
-npx @diffci.com/diffci@latest verify-workflow
+npx "@diffci.com/diffci@latest" observe
+npx "@diffci.com/diffci@latest" check
+npx "@diffci.com/diffci@latest" init
+npx "@diffci.com/diffci@latest" verify-workflow
 ```
 
 The GitHub Action and npm CLI establish the OSS/package distribution path. The hosted GitHub App and

@@ -1,0 +1,45 @@
+{
+  "manifest_version": "0.3",
+  "name": "diffci",
+  "display_name": "DiffCI",
+  "version": "0.2.10",
+  "description": "Change-aware CI validation and affected-test selection for coding agents.",
+  "long_description": "DiffCI analyzes a local Git checkout, identifies test-selection opportunities, and validates CI workflow safety. It runs on the user's machine, preserves access to local and uncommitted changes, and sends nothing to DiffCI Cloud.",
+  "author": {
+    "name": "DiffCI",
+    "url": "https://diffci.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DiffCI/DiffCI.com.git"
+  },
+  "homepage": "https://diffci.com",
+  "documentation": "https://diffci.com/mcp-server",
+  "support": "https://github.com/DiffCI/DiffCI.com/issues",
+  "license": "AGPL-3.0-only",
+  "keywords": [
+    "ci",
+    "cicd",
+    "mcp",
+    "model-context-protocol",
+    "test-selection",
+    "test-impact-analysis",
+    "affected-tests",
+    "ai-agents",
+    "local-first"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "node_modules/@diffci.com/diffci/dist-client/src/client/mcp.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/node_modules/@diffci.com/diffci/dist-client/src/client/mcp.js"
+      ],
+      "env": {
+        "DIFFCI_MCP": "1"
+      }
+    }
+  },
+  "tools_generated": true
+}

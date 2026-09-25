@@ -1,0 +1,15 @@
+{
+  "repository": "DiffCI/DiffCI.com",
+  "repositoryDescription": "DiffCI CLI and GitHub Action for change-aware CI analysis and conservative test selection",
+  "homepage": "https://diffci.com",
+  "packageName": "@diffci.com/diffci",
+  "packageDescription": "Change-aware CI analysis and conservative affected-test selection for GitHub Actions and coding agents",
+  "packageVersion": "0.2.10",
+  "actionVersion": "v0.2.10",
+  "actionSha": "e1d7bab271c5d83899bda0034d70d3e34c10c1f7",
+  "actionName": "DiffCI observer",
+  "actionDescription": "Observation-only change-aware CI analysis. Runs nothing, changes nothing, skips nothing.",
+  "marketplaceUrl": "https://github.com/marketplace/actions/diffci-observer",
+  "nodeRequirement": ">=22.5.0",
+  "license": "AGPL-3.0-only"
+}
