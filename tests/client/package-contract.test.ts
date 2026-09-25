@@ -33,7 +33,7 @@ describe("npm package contract", () => {
   it("publishes a diffci binary backed by the client build", () => {
     assert.equal(pkg.name, "@diffci.com/diffci");
     assert.equal(pkg.private, false);
-    assert.equal(pkg.mcpName, "io.github.adityankale190895/diffci");
+    assert.equal(pkg.mcpName, "io.github.DiffCI/diffci");
     assert.equal(pkg.bin?.diffci, "dist-client/src/client/cli.js");
     assert.equal(pkg.bin?.["diffci-mcp"], "dist-client/src/client/mcp.js");
     assert.equal(pkg.scripts?.prepack, "npm run build:client");
@@ -89,6 +89,6 @@ describe("npm package contract", () => {
     assert.equal(server.packages?.[0]?.version, pkg.version);
     assert.equal(server.packages?.[0]?.transport?.type, "stdio");
     assert.deepEqual(server.packages?.[0]?.packageArguments, [{ type: "positional", value: "mcp" }]);
-    assert.deepEqual(server.remotes, [{ type: "streamable-http", url: "https://diffci.com/mcp" }]);
+    assert.deepEqual(server.remotes, [{ type: "streamable-http", url: "https://diffci.com/mcp/v1" }]);
   });
 });
