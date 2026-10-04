@@ -32,7 +32,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { observe, isInsideRepository } from "./observe.js";
-import { inferFullCommand, inferComparableSelectedCommand } from "./full-command.js";
+import { inferFullCommand, inferComparableSelectedCommand, inferWorkspaceComparison } from "./full-command.js";
 import { addDiffciPackageScripts, detectPackageManager, installDiffci, type SupportedPackageManager } from "./install.js";
 import type { ObservationReport, WorkflowFinding } from "./report.js";
 import { submitObservation } from "./submit.js";
@@ -40,7 +40,7 @@ import { githubDeliveryWarning } from "./delivery-warning.js";
 import { sendUsageSignal } from "./usage-signal.js";
 import { detectSpecificationConflicts, readSpecificationFile } from "./spec-conflicts.js";
 import { formatVerificationSummary, verificationExitCode, verifyChanged, verifyRange } from "./verify.js";
-import { formatVerifySavingsSummary, measureCommand, runVerifySavings, writeVerifySavingsReport, type VerifySavingsOptions } from "./verify-savings.js";
+import { formatGrowthPrompt, formatVerifySavingsSummary, measureCommand, runVerifySavings, writeVerifySavingsReport, type VerifySavingsOptions } from "./verify-savings.js";
 import { auditWorkflows, isNonInterfering } from "./workflow-guard.js";
 
 interface ParsedArgs {
@@ -446,6 +446,8 @@ function summarise(report: ObservationReport, executionFollows = false): string 
       lines.push("  planned reduction: 0% test files (full validation required); runtime savings unmeasured");
     } else if (result.commandRefusalReason || result.proposedCommands.length === 0) {
       lines.push("  planned reduction: unavailable (no runnable selected command); runtime savings unmeasured");
+    } else if (result.workspaceCommands) {
+      lines.push("  workspace execution retains full auxiliary and non-isolated suites; affected-file counts do not measure execution reduction");
     } else if (result.totalTestCount > 0) {
       const avoided = Math.max(0, result.totalTestCount - result.selectedTests.length);
       const percent = (avoided / result.totalTestCount) * 100;
@@ -502,7 +504,10 @@ async function runCheck(flags: Record<string, string | boolean>, env: NodeJS.Pro
     return 1;
   }
 
-  const inferred = inferFullCommand(repoPath);
+  const commandPlanningStarted = performance.now();
+  const workspace = observation.result.mode !== "FULL" && !observation.result.commandRefusalReason
+    ? inferWorkspaceComparison(repoPath, observation.result.proposedCommands, observation.result.selectedTests) : undefined;
+  const inferred = workspace?.full ? { command: workspace.full, reason: workspace.reason } : inferFullCommand(repoPath);
   if (!inferred.command) {
     print(`  timing: unavailable (${inferred.reason})`);
     if (flags.json === true) console.log(JSON.stringify({ observation, timing: null, reason: inferred.reason }, null, 2));
@@ -526,14 +531,15 @@ async function runCheck(flags: Record<string, string | boolean>, env: NodeJS.Pro
     return full.exitCode === 0 && !full.timedOut ? 0 : 1;
   }
 
-  if (observation.result.commandRefusalReason || observation.result.proposedCommands.length !== 1) {
+  if (observation.result.commandRefusalReason || (!workspace?.selected && observation.result.proposedCommands.length !== 1)) {
     const reason = observation.result.commandRefusalReason ?? "the selection has no single runnable command";
     print(`  timing: unavailable (${reason})`);
     if (flags.json === true) console.log(JSON.stringify({ observation, timing: null, reason }, null, 2));
     return 0;
   }
 
-  const selected = inferComparableSelectedCommand(repoPath, observation.result.proposedCommands[0], observation.result.selectedTests);
+  const selected = workspace?.selected ? { command: workspace.selected, reason: workspace.reason }
+    : inferComparableSelectedCommand(repoPath, observation.result.proposedCommands[0], observation.result.selectedTests);
   if (!selected.command) {
     print(`  timing: unavailable (${selected.reason})`);
     if (flags.json === true) console.log(JSON.stringify({ observation, timing: null, reason: selected.reason }, null, 2));
@@ -546,6 +552,7 @@ async function runCheck(flags: Record<string, string | boolean>, env: NodeJS.Pro
     full: inferred.command,
     selectedFromReport: reportPath,
     selectedCommandOverride: selected.command,
+    analysisOverheadMs: observation.timings.totalMs + performance.now() - commandPlanningStarted,
     out: savingsPath,
     markdown: markdownPath,
     label: stringFlag(flags, "label") ?? basename(repoPath),
@@ -559,6 +566,7 @@ async function runCheck(flags: Record<string, string | boolean>, env: NodeJS.Pro
   });
   writeVerifySavingsReport(savings, { out: savingsPath, markdown: markdownPath });
   print(formatVerifySavingsSummary(savings));
+  if (formatGrowthPrompt(savings)) print(formatGrowthPrompt(savings));
   print(`  savings report: ${savingsPath}`);
   print(`  markdown: ${markdownPath}`);
   if (flags.json === true) console.log(JSON.stringify({ observation, savings }, null, 2));
@@ -642,7 +650,7 @@ async function runObserve(flags: Record<string, string | boolean>, env: NodeJS.P
     try {
       writeFileSync(
         env.GITHUB_STEP_SUMMARY,
-        `### DiffCI (observation only)\n\n\`\`\`\n${summary}${delivery ? `\n  delivery: ${delivery}` : ""}\n\`\`\`\n`,
+        `### DiffCI (observation only)\n\n\`\`\`\n${summary}${delivery ? `\n  delivery: ${delivery}` : ""}\n\`\`\`\n\n[Open-source engine: DiffCI/core](https://github.com/DiffCI/core)\n`,
         { flag: "a" },
       );
     } catch {
@@ -743,6 +751,7 @@ function runVerifySavingsCommand(flags: Record<string, string | boolean>, env: N
   const report = runVerifySavings(options);
   writeVerifySavingsReport(report, { out: options.out, markdown: options.markdown });
   console.log(formatVerifySavingsSummary(report));
+  if (formatGrowthPrompt(report)) console.log(formatGrowthPrompt(report));
   console.log(`  report: ${options.out}`);
   if (options.markdown) console.log(`  markdown: ${options.markdown}`);
   return report.comparison.evidenceValid ? 0 : 1;
@@ -819,6 +828,7 @@ async function runPilot(flags: Record<string, string | boolean>, env: NodeJS.Pro
   writeVerifySavingsReport(savings, { out: savingsPath, markdown: markdownPath });
 
   console.log(formatVerifySavingsSummary(savings));
+  if (formatGrowthPrompt(savings)) console.log(formatGrowthPrompt(savings));
   console.log(`  savings report: ${savingsPath}`);
   console.log(`  markdown: ${markdownPath}`);
   return savings.comparison.evidenceValid ? 0 : 1;
@@ -838,6 +848,9 @@ function runValidateSpecs(flags: Record<string, string | boolean>): number {
 }
 
 const USAGE = `diffci - change-aware CI analysis and paired timing
+
+Open-source engine: https://github.com/DiffCI/core
+Pilot a repository: https://diffci.com/#pilot
 
 Usage:
   diffci init [--repo <path>] [--workflow] [--verification-workflow] [--install] [--force]
