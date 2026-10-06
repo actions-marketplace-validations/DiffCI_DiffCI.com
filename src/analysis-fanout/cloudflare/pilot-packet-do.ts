@@ -1,10 +1,11 @@
 import type { SandboxLike } from "../sandbox-like.js";
 
-export type PilotPacketStep = "bootstrapping" | "cloning" | "analyzing" | "finalizing" | "done" | "failed" | "cancelled";
+export type PilotPacketStep = "bootstrapping" | "cloning" | "analyzing" | "installing" | "measuring" | "finalizing" | "done" | "failed" | "cancelled";
 export interface PilotPacketRecord {
   id: string; repository: string; baseSha: string; headSha: string; step: PilotPacketStep;
   sandboxId: string; processId?: string; startedAt: number; updatedAt: number; error?: string;
-  observation?: unknown; packet?: string; workflow?: string;
+  installCommand?: string; fullCommand?: string; repetitions?: number; timeoutMs?: number;
+  observation?: unknown; packet?: string; workflow?: string; savings?: unknown; savingsMarkdown?: string;
 }
 export interface PilotPacketDeps { sandbox: SandboxLike; artifact: string; now(): number }
 
@@ -16,9 +17,28 @@ const OPTIONS = { enableDefaultSession: false, keepAlive: false, sleepAfter: "10
 function fail(record: PilotPacketRecord, error: string): { record: PilotPacketRecord; nextAlarmDelayMs: null } {
   record.step = "failed"; record.error = error.slice(0, 1000); return { record, nextAlarmDelayMs: null };
 }
+async function failProcess(record: PilotPacketRecord, deps: PilotPacketDeps, prefix: string, processId?: string, exitCode?: number): Promise<{ record: PilotPacketRecord; nextAlarmDelayMs: null }> {
+  let detail = "";
+  if (processId) {
+    try {
+      const logs = await deps.sandbox.getProcessLogs(processId);
+      detail = `:${(logs.stderr || logs.stdout).slice(-800)}`;
+    } catch { /* the exit code still remains actionable */ }
+  }
+  return fail(record, `${prefix}:${exitCode ?? "missing"}${detail}`);
+}
 function artifactParts(value: string): { spec: string; integrity: string } | null {
   const match = /^npm:(@diffci\.com\/diffci@(\d+\.\d+\.\d+))#(sha512-[A-Za-z0-9+/=]+)$/.exec(value);
   return match ? { spec: match[1]!, integrity: match[3]! } : null;
+}
+function base64(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+function decodedShell(command: string): string {
+  return `printf %s '${base64(command)}' | base64 -d | bash`;
 }
 
 export async function stepPilotPacket(record: PilotPacketRecord, deps: PilotPacketDeps): Promise<{ record: PilotPacketRecord; nextAlarmDelayMs: number | null }> {
@@ -52,10 +72,38 @@ export async function stepPilotPacket(record: PilotPacketRecord, deps: PilotPack
         record.processId = process.id; return { record, nextAlarmDelayMs: POLL_MS };
       }
       const process = await deps.sandbox.getProcess(record.processId);
-      if (!process || ["failed", "killed", "error"].includes(process.status)) return fail(record, `analysis-failed:${process?.exitCode ?? "missing"}`);
+      if (!process || ["failed", "killed", "error"].includes(process.status)) return failProcess(record, deps, "analysis-failed", record.processId, process?.exitCode);
       if (process.status !== "completed") return { record, nextAlarmDelayMs: POLL_MS };
-      if (process.exitCode !== 0) return fail(record, `analysis-exit:${process.exitCode}`);
-      record.step = "finalizing"; return { record, nextAlarmDelayMs: 0 };
+      if (process.exitCode !== 0) return failProcess(record, deps, "analysis-exit", record.processId, process.exitCode);
+      record.processId = undefined;
+      record.step = record.installCommand && record.fullCommand ? "installing" : "finalizing";
+      return { record, nextAlarmDelayMs: 0 };
+    }
+    if (record.step === "installing") {
+      if (!record.processId) {
+        const seconds = Math.ceil((record.timeoutMs ?? 30 * 60_000) / 1000);
+        const process = await deps.sandbox.startProcess(`timeout ${seconds}s bash -lc "${decodedShell(record.installCommand!)}"`, { cwd: "/workspace/repo", autoCleanup: false });
+        record.processId = process.id; return { record, nextAlarmDelayMs: POLL_MS };
+      }
+      const process = await deps.sandbox.getProcess(record.processId);
+      if (!process || ["failed", "killed", "error"].includes(process.status)) return failProcess(record, deps, "install-failed", record.processId, process?.exitCode);
+      if (process.status !== "completed") return { record, nextAlarmDelayMs: POLL_MS };
+      if (process.exitCode !== 0) return failProcess(record, deps, "install-exit", record.processId, process.exitCode);
+      record.processId = undefined; record.step = "measuring"; return { record, nextAlarmDelayMs: 0 };
+    }
+    if (record.step === "measuring") {
+      if (!record.processId) {
+        const timeoutMs = record.timeoutMs ?? 30 * 60_000;
+        const seconds = Math.ceil((timeoutMs * 2 * (record.repetitions ?? 1) + 5 * 60_000) / 1000);
+        const full = base64(record.fullCommand!);
+        const command = `FULL=$(printf %s '${full}' | base64 -d); timeout ${seconds}s /opt/pilot/node_modules/.bin/diffci pilot --repo /workspace/repo --out-dir /workspace/paired --base "${record.baseSha}" --head "${record.headSha}" --label "${record.repository}" --full "$FULL" --timeout-ms "${timeoutMs}" --repetitions "${record.repetitions ?? 1}"`;
+        const process = await deps.sandbox.startProcess(command, { cwd: "/workspace", autoCleanup: false });
+        record.processId = process.id; return { record, nextAlarmDelayMs: POLL_MS };
+      }
+      const process = await deps.sandbox.getProcess(record.processId);
+      if (!process || ["killed", "error"].includes(process.status)) return failProcess(record, deps, "measurement-failed", record.processId, process?.exitCode);
+      if (process.status !== "completed" && process.status !== "failed") return { record, nextAlarmDelayMs: POLL_MS };
+      record.processId = undefined; record.step = "finalizing"; return { record, nextAlarmDelayMs: 0 };
     }
     if (record.step === "finalizing") {
       const [observation, packet, workflow] = await Promise.all([
@@ -65,6 +113,14 @@ export async function stepPilotPacket(record: PilotPacketRecord, deps: PilotPack
       ]);
       if ([observation.content, packet.content, workflow.content].some((value) => new TextEncoder().encode(value).length > MAX_ARTIFACT_BYTES)) return fail(record, "artifact-too-large");
       record.observation = JSON.parse(observation.content); record.packet = packet.content; record.workflow = workflow.content;
+      if (record.fullCommand) {
+        const [savings, markdown] = await Promise.all([
+          deps.sandbox.readFile("/workspace/paired/diffci-savings.json"),
+          deps.sandbox.readFile("/workspace/paired/diffci-savings.md"),
+        ]);
+        if ([savings.content, markdown.content].some(value => new TextEncoder().encode(value).length > MAX_ARTIFACT_BYTES)) return fail(record, "paired-artifact-too-large");
+        record.savings = JSON.parse(savings.content); record.savingsMarkdown = markdown.content;
+      }
       record.step = "done"; return { record, nextAlarmDelayMs: null };
     }
     return { record, nextAlarmDelayMs: null };
