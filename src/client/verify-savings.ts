@@ -184,7 +184,7 @@ function readSelectionFromObservation(path: string, override?: string): Resolved
   };
   if (parsed.status !== "OBSERVED") throw new Error(`--selected-from-report requires an OBSERVED report; got ${String(parsed.status)}`);
   const commands = parsed.result?.proposedCommands;
-  if (!Array.isArray(commands) || !commands.length || commands.some(command => typeof command !== "string" || !command.trim()) || (commands.length !== 1 && !override)) {
+  if (!Array.isArray(commands) || commands.some(command => typeof command !== "string" || !command.trim()) || (commands.length !== 1 && !override)) {
     throw new Error("--selected-from-report requires exactly one non-empty proposed command; use --selected with an explicit command covering the complete selection for multi-command plans");
   }
   const command = override ?? commands[0];
@@ -692,7 +692,7 @@ export function runVerifySavings(options: VerifySavingsOptions): VerifySavingsRe
   const analysisOverheadMs = options.analysisOverheadMs ?? selection.analysisOverheadMs;
   const repetitions = options.repetitions ?? 1;
   if (!Number.isInteger(repetitions) || repetitions < 1 || repetitions > 20) throw new Error("--repetitions must be an integer from 1 to 20");
-  const declaredCacheState = options.cacheState ?? "unknown";
+  const declaredCacheState = options.cacheState ?? (options.cachePreparationCommand ? "warm" : "unknown");
   if (!(["cold", "warm", "unknown"] as const).includes(declaredCacheState)) throw new Error("--cache-state must be cold, warm, or unknown");
   const alternatingOrder = options.alternateOrder ?? repetitions > 1;
   const protocol: SavingsProtocol = {

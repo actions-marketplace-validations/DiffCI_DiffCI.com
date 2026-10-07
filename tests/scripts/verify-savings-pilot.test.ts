@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { buildReport, parseArgs, renderMarkdown, runPilot, type CommandMeasurement } from "../../scripts/verify-savings-pilot.js";
-import { formatVerifySavingsSummary, type SavingsProvenance } from "../../src/client/verify-savings.js";
+import { formatVerifySavingsSummary, runVerifySavings, type SavingsProvenance } from "../../src/client/verify-savings.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -164,6 +164,32 @@ describe("verify-savings pilot report", () => {
     assert.equal(report.comparison.performanceEvidence, "CONTROLLED");
     assert.equal(report.comparison.repetitions, 3);
     assert.equal(report.failureAssessment.kind, "none");
+  });
+
+  it("infers a controlled warm cache when a preparation command is provided", () => {
+    const dir = mkdtempSync(join(tmpdir(), "diffci-pilot-prepared-cache-"));
+    execFileSync("git", ["init", "--quiet"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "test@diffci.local"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: dir });
+    writeFileSync(join(dir, "package.json"), "{}\n");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "--quiet", "-m", "fixture"], { cwd: dir });
+
+    const report = runPilot({
+      full: "node --version",
+      selected: "node --version",
+      out: join(dir, "report.json"),
+      cwd: dir,
+      timeoutMs: 60_000,
+      tailBytes: 12_000,
+      repetitions: 3,
+      cachePreparationCommand: "node --version",
+    });
+
+    assert.equal(report.protocol.declaredCacheState, "warm");
+    assert.equal(report.protocol.cacheStateControlled, true);
+    assert.ok(report.trials.every((trial) => trial.cacheState.full === "warm" && trial.cacheState.selected === "warm"));
+    assert.equal(report.comparison.performanceEvidence, "CONTROLLED");
   });
 
   it("classifies a stable repeated full-only failure as a selection miss", () => {
@@ -388,5 +414,23 @@ describe("verify-savings pilot report", () => {
     assert.equal(report.totalTestCount, 3);
     assert.equal(report.full.exitCode, 0);
     assert.equal(report.selected.exitCode, 0);
+  });
+
+  it("accepts an explicit selected command for a zero-test observation", () => {
+    const dir = mkdtempSync(join(tmpdir(), "diffci-zero-selection-"));
+    const reportPath = join(dir, "observation.json");
+    writeFileSync(reportPath, JSON.stringify({
+      status: "OBSERVED",
+      observer: { version: "0.3.7" },
+      commitRange: { headSha: "a".repeat(40) },
+      result: { proposedCommands: [], selectedTests: [], totalTestCount: 2 },
+      timings: { totalMs: 10 },
+    }));
+    const report = runVerifySavings({
+      full: `${process.execPath} --version`, selectedFromReport: reportPath,
+      selectedCommandOverride: `${process.execPath} --version`, cwd: dir,
+      out: join(dir, "savings.json"), timeoutMs: 10_000, tailBytes: 1000,
+    });
+    assert.equal(report.selectedTestCount, 0);
   });
 });
